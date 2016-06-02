@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>Tabula Scripta - Porting MXNet's Neural-Style Python example to MXNet.jl</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link href="https://fonts.googleapis.com/css?family=Arvo:400,700,400italic" rel="stylesheet" type="text/css">
+    </head>
+    <body>
+        <div id="header">
+            <div id="logo">
+                <a href="../">Tabula Scripta</a>
+            </div>
+            <div id="navigation">
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../contact.html">Contact</a>
+                <a href="../archive.html">Writings</a>
+            </div>
+        </div>
+
+        <div id="content">
+            <h1>Porting MXNet's Neural-Style Python example to MXNet.jl</h1>
+
+            <div class="info">
+    Posted on January 11, 2016
+    
+        by Brian Cohen
+    
+</div>
+
+<p>The following was copied from <a href="https://github.com/dmlc/MXNet.jl/issues/56" class="uri">https://github.com/dmlc/MXNet.jl/issues/56</a> to document what was needed to port Neural Style (which transfers the “style” of one image to antoher using an image recognition neural network), and may be modified from the original to add context.</p>
+<p>These notes intend to document what I’ve had to do to get a working implementation of <a href="http://arxiv.org/abs/1508.06576">A Neural Algorithm of Artistic Style</a> from within Julia. These may or may not be applicable for other examples ported from Python to Julia, but are here for reference.</p>
+<h3 id="mxnet.jl">MXNet.jl</h3>
+<ul>
+<li><a href="http://mxnetjl.readthedocs.org/">Official documentation</a> might be a good place to start.</li>
+</ul>
+<h3 id="argparse-to-argparse.jl">argparse to ArgParse.jl</h3>
+<ul>
+<li><a href="http://argparsejl.readthedocs.org/">ArgParse.jl’s documention</a></li>
+</ul>
+<p>This library is used to turn it into a command-line program.</p>
+<h3 id="named-tuples-to-composite-types">Named tuples to Composite types</h3>
+<ul>
+<li><a href="https://julia.readthedocs.org/en/latest/manual/types/#composite-types">Julia documentation on (composite) types</a></li>
+</ul>
+<p>This translation is pretty easy, and Julia’s built-in composite types are very straightforward to work with, compared to Python’s named tuples which require <code>from collections import namedtuple</code>. For the <code>ConvExecutor</code>, it means going from</p>
+<div class="sourceCode"><pre class="sourceCode python"><code class="sourceCode python">Executor <span class="op">=</span> namedtuple(<span class="st">'Executor'</span>, [<span class="st">'executor'</span>, <span class="st">'data'</span>, <span class="st">'data_grad'</span>])</code></pre></div>
+<p>to</p>
+<div class="sourceCode"><pre class="sourceCode julia"><code class="sourceCode julia"><span class="kw">type</span> SGExecutor
+    executor :: mx.Executor
+    data :: mx.NDArray
+    data_grad :: mx.NDArray
+<span class="kw">end</span></code></pre></div>
+<p>I also renamed it just to avoid ambiguity. The type signatures are optional, but I included them for type safety.</p>
+<h3 id="row-major-order-to-column-major-order-arrays">Row-major order to Column-major order arrays</h3>
+<p>If interested, read the wikipedia article <a href="https://en.wikipedia.org/wiki/Row-major_order">here</a>, but summarized, Julia tends to think of a matrix as a array of column-vectors, while Python natively stores it as a list of row lists. The major difference when it comes to dealing with multi-dimensional arrays is that the ordering of shape is inverted.</p>
+<p>Example:</p>
+<div class="sourceCode"><pre class="sourceCode python"><code class="sourceCode python">out.infer_shape(data<span class="op">=</span>(<span class="dv">1</span>, <span class="dv">3</span>, input_size[<span class="dv">0</span>], input_size[<span class="dv">1</span>]))</code></pre></div>
+<p>would become the following in Julia</p>
+<div class="sourceCode"><pre class="sourceCode julia"><code class="sourceCode julia">mx.infer_shape(out, data=(input_size[<span class="fl">1</span>], input_size[<span class="fl">2</span>], <span class="fl">3</span>, <span class="fl">1</span>))</code></pre></div>
+<h3 id="memory-leaks">Memory leaks</h3>
+<p>As of Julia v0.4, some methods cannot be directly overwritten such as assignment operators (<code>_ ⊗= _</code> for some binary operation ⊗ in <code>[-,+,/,*]</code>), so for lines that take the form <code>a[:] ⊗= ...</code>, you can take one of several approaches to avoid unnecessary use of graphics memory, all of which are described in the <a href="https://github.com/dmlc/MXNet.jl/blob/master/src/ndarray.jl">NDArray source code</a>.</p>
+<ol style="list-style-type: decimal">
+<li><code>b=copy(a::NDArray)</code> to a julia array then perform your operations and then <code>copy!(a,b)</code> back.</li>
+<li>some combination of <code>mx.mult_to!</code>, <code>mx.div_from!</code>, etc. for directly modifying the NDArray</li>
+<li>Use the macro <code>mx.@nd_as_jl</code> to work as if you were just using native arrays</li>
+</ol>
+<p>This takes arguments <code>ro</code> for NDArrays that are read and <code>rw</code> for those that are written to. This macro copies everything to native Julia arrays and then writes them back into the NDArrays.</p>
+<h3 id="implement-factor-based-learning-rate">Implement Factor-based Learning Rate</h3>
+<p>This required modifying Mocha.jl’s <em>src/optimizer.jl</em> as to include an unimplemented subtype of <code>AbstractLearningRateScheduler</code> so it can cooperate with the Stochastic Gradient Descent. There may be a better way to do this. Also not entirely comfortable with the robustness of my implementation as of the time of writing.</p>
+
+        </div>
+        <div id="footer">
+            Generated with
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </div>
+    </body>
+</html>
